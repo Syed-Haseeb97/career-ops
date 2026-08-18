@@ -1,5 +1,5 @@
-import { validateFlags } from './lib/cli-flags.mjs';
 #!/usr/bin/env node
+import { validateFlags } from './lib/cli-flags.mjs';
 /**
  * stats.mjs — Lifetime pipeline stats aggregator (zero-token). #1604
  *
