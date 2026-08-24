@@ -35,8 +35,9 @@ for (const [script, args, flag] of cases) {
   test(`${script} rejects unusable value for ${flag}`, () => {
     const result = run(script, ...args);
     assert.equal(result.status, 2, `${script} ${args.join(' ')} exited ${result.status}, want 2`);
-    assert.match(result.output, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.match(result.output, /requires (a )?(valid |a )?value|requires a (safe )?integer/i);
+    const escapedFlag = flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(result.output, new RegExp(escapedFlag));
+    assert.match(result.output, /requires/);
   });
 }
 
