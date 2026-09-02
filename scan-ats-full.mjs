@@ -9,6 +9,11 @@
  * your portals.yml `title_filter` / `location_filter` — no manual company
  * curation needed.
  *
+ * Optional `title_filter_full` in portals.yml overrides `title_filter` for
+ * THIS scanner only, so the keywords tuned for scan.mjs's curated company
+ * list do not have to double as the filter for every public board. Absent,
+ * `title_filter` is used exactly as before.
+ *
  * Company directories come from the public job-board-aggregator dataset
  * (github.com/Feashliaa/job-board-aggregator), cached in data/cache/ for 24h.
  *
@@ -30,11 +35,11 @@
  *   node scan-ats-full.mjs --help               # print this usage block and exit
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, renameSync, unlinkSync } from 'fs';
-import { pathToFileURL } from 'url';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, unlinkSync } from 'fs';
 import { createHash } from 'crypto';
 import path from 'path';
 import * as yaml from 'js-yaml';
+import { renameSyncWithRetry } from './tracker-utils.mjs';
 
 import { makeHttpCtx, fetchJson } from './providers/_http.mjs';
 import { isResolverFailure, dnsPacingStats } from './providers/_dns-cache.mjs';
@@ -44,9 +49,11 @@ import ashby from './providers/ashby.mjs';
 import workday from './providers/workday.mjs';
 import icims from './providers/icims.mjs';
 import { buildTitleFilter, buildLocationFilter, buildContentFilter, matchedTitleKeywords, loadSeenUrls, normalizeUrlForDedup, appendToPipeline, appendToScanHistory, loadBlacklist, parseSinceDays } from './scan.mjs';
+import { localToday } from './lib/local-today.mjs';
 import { SEED_SOURCES, toPortalEntry } from './seeds/vc-portfolios.mjs';
 import { normalizeCompany } from './tracker-utils.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
+import { isMainModule } from './lib/is-main-module.mjs';
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -132,7 +139,7 @@ function writeCheckpoint(cp) {
     mkdirSync(CACHE_DIR, { recursive: true });
     const tmp = `${CHECKPOINT_PATH}.tmp`;
     writeFileSync(tmp, JSON.stringify(cp), 'utf-8');
-    renameSync(tmp, CHECKPOINT_PATH); // atomic: a crash mid-write can't corrupt the checkpoint
+    renameSyncWithRetry(tmp, CHECKPOINT_PATH); // atomic: a crash mid-write can't corrupt the checkpoint; retries Windows contention
     return true;
   } catch (err) {
     console.error(`\n⚠ checkpoint write failed (${err.message}) — sweep continues, --resume unavailable`);
@@ -396,6 +403,27 @@ export function filterBlacklistedOffers(offers, blacklist, { includeBlacklisted 
   return { offers: kept, filteredBlacklist, annotatedBlacklisted };
 }
 
+// `title_filter` is written for scan.mjs, whose corpus is the curated
+// tracked_companies list. That corpus is what makes a broad keyword safe:
+// "Backend" at a company you already vetted is a real lead, and dropping it
+// costs real roles — so tightening the shared key to protect this sweep is a
+// regression for the scanner that actually produces applications.
+//
+// This sweep removes the corpus and leaves the same keywords carrying the
+// whole burden against every public board. Broad keywords then match on a
+// scale they were never chosen for, and ordinary English words land as
+// unrelated product names: one 38,854-board sweep wrote 426 postings, of
+// which 142 passed on "Backend" alone and the rest on Fuel Associate,
+// Traffic Anchor, ICP Mass Spec, Principal Mechanical Canister Eng. Across
+// 194 distinct companies, one matched a crypto name — a gas-station chain.
+//
+// Optional `title_filter_full` lets one portals.yml carry a strict profile
+// for this sweep and a broad one for scan.mjs. Absent — the default — this
+// returns `title_filter` and behaviour is byte-identical to before.
+export function resolveTitleFilterConfig(config) {
+  return config?.title_filter_full ?? config?.title_filter;
+}
+
 // Title/location/content filter chain for one posting, used by runSeedScan().
 // The main ATS-directory loop below inlines the same three checks (it tracks
 // a droppedContent counter per stage for the run summary), but this shared,
@@ -410,6 +438,27 @@ export function passesFilters(job, { titleFilter, locationFilter, contentFilter,
   if (!locationFilter(job.location, job.url, job.title)) return false;
   if (contentFilter && !contentFilter(job.description, matchedTitleKeywords(job.title, titleFilterConfig))) return false;
   return true;
+}
+
+// Prefer a provider's own scoped dedup key over URL normalization when the
+// provider can derive one — e.g. workday.mjs's requisition ID, which
+// collapses the same posting served under several sites of one tenant
+// (different paths, sometimes different hosts) that normalizeUrlForDedup
+// can't recognize as duplicates (#3439). `provider` is optional so this stays
+// safe to call for seed-pass offers, which carry no SOURCES entry to look one
+// up from. Falls back to the pre-#3439 behavior whenever no key is derived.
+export function dedupTokenFor(job, provider) {
+  return provider?.dedupKey?.(job) || normalizeUrlForDedup(job.url);
+}
+
+// Resolve an offer's provider from its recorded `source` string — shared by
+// the checkpoint-resume reseed below and by loadSeenUrls' extraTokensFor
+// hook. `source` is "{sourcesKey}-full" for the main sweep and
+// "{seedId}-seed" for seed offers; SOURCES has no seed entries, so a seed
+// offer's lookup misses and callers fall back to URL-only dedup, unchanged
+// from before #3439.
+export function providerForSource(source) {
+  return SOURCES[String(source || '').replace(/-full$/, '')]?.provider;
 }
 
 // Cap-aware company sampling. Default: the dataset's natural (alphabetical)
@@ -504,9 +553,13 @@ export async function runSeedScan(seedId, opts, ctx, seenUrls, label) {
         contentFilter: opts.contentFilter,
         titleFilterConfig: opts.titleFilterConfig,
       })) continue;
-      const dedupUrl = normalizeUrlForDedup(job.url);
-      if (seenUrls.has(dedupUrl)) continue;
-      seenUrls.add(dedupUrl);
+      // provider is always one of SEED_PROVIDERS (greenhouse/lever/ashby) here —
+      // none currently define dedupKey, so this is the same normalizeUrlForDedup
+      // behavior as before; kept via the shared helper so the two dedup sites
+      // in this file can't quietly drift apart (#3439).
+      const dedupToken = dedupTokenFor(job, provider);
+      if (seenUrls.has(dedupToken)) continue;
+      seenUrls.add(dedupToken);
       offers.push({ ...job, source: sourceName, dateStatus: job.postedAt ? 'dated' : 'unknown' });
     }
   });
@@ -612,20 +665,27 @@ async function main() {
   // In --json mode, stdout is reserved for the single machine-readable result,
   // so every human-facing line goes to stderr instead.
   const log = opts.json ? (...a) => console.error(...a) : (...a) => console.log(...a);
-  const progress = (s) => { if (!opts.json) process.stdout.write(s); };
+  // Same rule as `log` above: under --json the counter goes to stderr rather
+  // than being dropped. Suppressing it left a sweep with no progress signal on
+  // either stream, and `--dry-run --json` has no checkpoint to fall back on
+  // (dry runs write no state), so a long run was indistinguishable from a hung
+  // one.
+  const progress = (s) => { if (opts.json) process.stderr.write(s); else process.stdout.write(s); };
 
   if (!existsSync(PORTALS_PATH)) {
     console.error('Error: portals.yml not found. Run onboarding first — the reverse scan reuses its title_filter/location_filter.');
     process.exit(1);
   }
   const config = yaml.load(readFileSync(PORTALS_PATH, 'utf-8'));
-  const titleFilter = buildTitleFilter(config?.title_filter);
+  const fullTitleFilterConfig = resolveTitleFilterConfig(config);
+  const titleFilter = buildTitleFilter(fullTitleFilterConfig);
   const locationFilter = buildLocationFilter(config?.location_filter);
   // Same content_filter (incl. by_title_keyword scoping) scan.mjs applies —
   // see #1846. Built once here from the same portals.yml config.
   const contentFilter = buildContentFilter(config?.content_filter);
-  if (!config?.title_filter?.positive?.length) {
-    console.error('⚠️  portals.yml has no title_filter.positive — every fresh posting on every board will match. Consider adding keywords.');
+  if (!fullTitleFilterConfig?.positive?.length) {
+    const key = config?.title_filter_full ? 'title_filter_full' : 'title_filter';
+    console.error(`⚠️  portals.yml has no ${key}.positive — every fresh posting on every board will match. Consider adding keywords.`);
   }
   // Attach filters to opts so runSeedScan can use them without extra parameters.
   opts.titleFilter = titleFilter;
@@ -633,14 +693,24 @@ async function main() {
   opts.contentFilter = contentFilter;
   // Raw title_filter config, needed by matchedTitleKeywords() to scope
   // content_filter.by_title_keyword the same way scan.mjs does.
-  opts.titleFilterConfig = config?.title_filter;
+  opts.titleFilterConfig = fullTitleFilterConfig;
 
   const atsSummary = opts.ats.length ? `ats: ${opts.ats.join(', ')}` : '';
   const seedsSummary = opts.seeds.length ? `seeds: ${opts.seeds.join(', ')}` : '';
   const sourcesSummary = [atsSummary, seedsSummary].filter(Boolean).join(' | ');
   log(`Reverse ATS scan — ${sourcesSummary} | since ${opts.sinceDays}d${opts.limit < Infinity ? ` | limit ${opts.limit}/ats` : ''}${opts.shuffle ? ' | shuffled' : ''}${opts.includeUndated ? ' | +undated' : ''}${opts.liveness ? ' | liveness' : ''}${opts.dryRun ? ' | DRY RUN' : ''}`);
 
-  const { seen: seenUrls } = loadSeenUrls();
+  // extraTokensFor: a historical scan-history.tsv row records the URL it was
+  // FIRST seen on, so without this a Workday requisition seen last run under
+  // site A's URL wouldn't be recognized when this run only sees it under
+  // site B — the plain normalizeUrlForDedup comparison never matches across
+  // sites, and only fresh-run offers were reseeded with the provider key
+  // (#3439). `portal` here is scan-history.tsv's recorded `offer.source`, so
+  // providerForSource resolves it the same way the checkpoint reseed above
+  // does.
+  const { seen: seenUrls } = loadSeenUrls({}, {
+    extraTokensFor: (url, portal) => providerForSource(portal)?.dedupKey?.({ url }),
+  });
   const blacklist = loadBlacklist();
   // sinceMs and includeUndated let providers (currently only workday.mjs)
   // stop paginating a tenant early instead of always walking to max_pages:
@@ -655,7 +725,11 @@ async function main() {
   // inactionable. It used to infer that from sinceMs being set, which stopped
   // being true once #2418 taught scan.mjs --since to set it too (#2495).
   const ctx = { ...makeHttpCtx(), sinceMs: cutoff, includeUndated: opts.includeUndated, syntheticEntries: true };
-  const date = new Date().toISOString().slice(0, 10);
+  // The LOCAL calendar day, not the UTC one. This value lands in
+  // scan-history.tsv's first_seen, which shouldDedupScanHistoryRow measures the
+  // recheck window against using the local day (#3070). Stamping it in UTC put
+  // the two sides of that comparison on different clocks.
+  const date = localToday();
 
   // Same defensive default as completedSources/counters below: a version-1
   // checkpoint that lost its offers array would otherwise set this to undefined
@@ -663,7 +737,18 @@ async function main() {
   const newOffers = checkpoint?.offers || [];
   // Checkpointed matches were already deduped once — without re-seeding, a
   // resumed run re-scanning the in-flight overlap would duplicate them.
-  for (const o of newOffers) seenUrls.add(normalizeUrlForDedup(o.url));
+  // Reseed with the SAME token a fresh dedup check would produce (provider
+  // key when the source's provider has one, URL otherwise, matching
+  // processJobs below) — reseeding by URL alone would miss a Workday
+  // requisition's key, letting the other of its two sites' offers back in
+  // after a resume even though the pre-checkpoint sweep had already
+  // collapsed them (#3439). o.source is "{sourcesKey}-full" for the main
+  // sweep and "{seedId}-seed" for seed offers; SOURCES has no seed entries,
+  // so a seed offer's lookup misses and falls back to URL — its unchanged,
+  // pre-#3439 behavior.
+  for (const o of newOffers) {
+    seenUrls.add(dedupTokenFor(o, providerForSource(o.source)));
+  }
   const completedSources = new Set(checkpoint?.completedSources || []);
   const cc = checkpoint?.counters || {};
   let totalCompaniesScanned = cc.totalCompaniesScanned || 0;
@@ -735,10 +820,10 @@ async function main() {
       // location segment when the provider reports a rolled-up "N Locations" string;
       // job.title so a title-stated remote role survives a city-only location.
       if (!locationFilter(job.location, job.url, job.title)) continue;
-      if (!contentFilter(job.description, matchedTitleKeywords(job.title, config?.title_filter))) { droppedContent++; continue; }
-      const dedupUrl = normalizeUrlForDedup(job.url);
-      if (seenUrls.has(dedupUrl)) continue;
-      seenUrls.add(dedupUrl); // intra-scan dedup
+      if (!contentFilter(job.description, matchedTitleKeywords(job.title, fullTitleFilterConfig))) { droppedContent++; continue; }
+      const dedupToken = dedupTokenFor(job, provider);
+      if (seenUrls.has(dedupToken)) continue;
+      seenUrls.add(dedupToken); // intra-scan dedup
       newOffers.push({ ...job, source: `${sourceName}-full`, dateStatus: job.postedAt ? 'dated' : 'unknown' });
     }
   };
@@ -1069,7 +1154,7 @@ async function main() {
 }
 
 // Only run main() when invoked directly, not when imported by tests.
-if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
+if (isMainModule(import.meta.url)) {
   main().catch(err => {
     console.error('Fatal:', err.message);
     process.exit(1);
