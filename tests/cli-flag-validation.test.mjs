@@ -151,11 +151,11 @@ test('fix-slugs rejects missing --file values (bare, empty, or next-is-flag)', (
 // The CLI should reject unusable or unsafe integers (including 9007199254740992)
 // with an exit code of 2 so callers can distinguish usage errors from runtime
 // failures.
-for (const bad of ['abc', '-5', '1.5', '9007199254740992']) {
+for (const bad of ['abc', '0', '-5', '1.5', '9007199254740992']) {
   test(`analyze-patterns: --min-threshold ${bad} exits 2`, () => {
     const r = runScript('analyze-patterns.mjs', '--min-threshold', bad);
     assert.equal(r.status, 2, `exited ${r.status}, want 2 for bad value ${bad}`);
-    assert.match(r.all, /--min-threshold requires a non-negative integer, got/);
+    assert.match(r.all, /--min-threshold requires a positive integer, got/);
   });
 }
 
@@ -166,6 +166,18 @@ for (const bad of ['abc', '0', '-1', '1.5', '9007199254740992']) {
     assert.match(r.all, /--min-vendor-n requires a positive integer, got/);
   });
 }
+
+test('analyze-patterns: bare --min-threshold exits 2', () => {
+  const r = runScript('analyze-patterns.mjs', '--min-threshold');
+  assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+  assert.match(r.all, /--min-threshold requires a value/);
+});
+
+test('analyze-patterns: bare --min-vendor-n exits 2', () => {
+  const r = runScript('analyze-patterns.mjs', '--min-vendor-n');
+  assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+  assert.match(r.all, /--min-vendor-n requires a value/);
+});
 
 
 // --- missing operand for a RECOGNIZED value-taking flag (#3087) ------------

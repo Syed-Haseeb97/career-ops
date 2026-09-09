@@ -1673,6 +1673,15 @@ function printSummary(result) {
 
 // --- Run (CLI only; guarded so the module is safely importable for tests) ---
 if (isMainModule(import.meta.url)) {
+  for (const flag of VALUE_FLAGS) {
+    const index = args.indexOf(flag);
+    const next = index === -1 ? undefined : args[index + 1];
+    if (index !== -1 && (next === undefined || next.startsWith('--'))) {
+      console.error(`Error: ${flag} requires a value`);
+      process.exit(2);
+    }
+  }
+
   validateFlags(args, KNOWN_FLAGS, USAGE, {
     valueFlags: VALUE_FLAGS,
     requireOperand: true,
@@ -1685,12 +1694,12 @@ if (isMainModule(import.meta.url)) {
   if (rawMinThreshold !== undefined) {
     const text = String(rawMinThreshold).trim();
     if (!/^\d+$/.test(text)) {
-      console.error(`Error: --min-threshold requires a non-negative integer, got "${rawMinThreshold}"`);
+      console.error(`Error: --min-threshold requires a positive integer, got "${rawMinThreshold}"`);
       process.exit(2);
     }
     const parsed = Number(text);
-    if (!Number.isSafeInteger(parsed) || parsed < 0) {
-      console.error(`Error: --min-threshold requires a non-negative integer, got "${rawMinThreshold}"`);
+    if (!Number.isSafeInteger(parsed) || parsed < 1) {
+      console.error(`Error: --min-threshold requires a positive integer, got "${rawMinThreshold}"`);
       process.exit(2);
     }
   }
