@@ -147,6 +147,27 @@ test('fix-slugs rejects missing --file values (bare, empty, or next-is-flag)', (
   assert.doesNotMatch(rShortFlagEq.all, /no portals file at/i);
 });
 
+// --- analyze-patterns specific: invalid numeric flag values must exit 2 -----
+// The CLI should reject unusable or unsafe integers (including 9007199254740992)
+// with an exit code of 2 so callers can distinguish usage errors from runtime
+// failures.
+for (const bad of ['abc', '-5', '1.5', '9007199254740992']) {
+  test(`analyze-patterns: --min-threshold ${bad} exits 2`, () => {
+    const r = runScript('analyze-patterns.mjs', '--min-threshold', bad);
+    assert.equal(r.status, 2, `exited ${r.status}, want 2 for bad value ${bad}`);
+    assert.match(r.all, /--min-threshold requires a non-negative integer, got/);
+  });
+}
+
+for (const bad of ['abc', '0', '-1', '1.5', '9007199254740992']) {
+  test(`analyze-patterns: --min-vendor-n ${bad} exits 2`, () => {
+    const r = runScript('analyze-patterns.mjs', '--min-vendor-n', bad);
+    assert.equal(r.status, 2, `exited ${r.status}, want 2 for bad value ${bad}`);
+    assert.match(r.all, /--min-vendor-n requires a positive integer, got/);
+  });
+}
+
+
 // --- missing operand for a RECOGNIZED value-taking flag (#3087) ------------
 //
 // A different defect than an unrecognized flag: the flag is spelled right,
