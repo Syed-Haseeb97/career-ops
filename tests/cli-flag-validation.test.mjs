@@ -167,15 +167,45 @@ for (const bad of ['abc', '0', '-1', '1.5', '9007199254740992']) {
   });
 }
 
-test('analyze-patterns: bare --min-threshold exits 2', () => {
-  const r = runScript('analyze-patterns.mjs', '--min-threshold');
-  assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+for (const [flag, value] of [
+  ['--min-threshold', '5'],
+  ['--min-vendor-n', '5'],
+]) {
+  test(`analyze-patterns: bare ${flag} exits 2`, () => {
+    const r = runScript('analyze-patterns.mjs', flag);
+    assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+    assert.match(r.all, new RegExp(`${flag} requires a value`));
+  });
+
+  test(`analyze-patterns: empty ${flag}= exits 2`, () => {
+    const r = runScript('analyze-patterns.mjs', `${flag}=`);
+    assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+    assert.match(r.all, new RegExp(`${flag} requires a value`));
+  });
+
+  test(`analyze-patterns: ${flag} followed by another flag exits 2`, () => {
+    const other = flag === '--min-threshold' ? '--summary' : '--self-test';
+    const r = runScript('analyze-patterns.mjs', flag, other);
+    assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+    assert.match(r.all, new RegExp(`${flag} requires a value`));
+  });
+
+  test(`analyze-patterns: duplicate ${flag} occurrences exit 2`, () => {
+    const r = runScript('analyze-patterns.mjs', flag, value, `${flag}=abc`);
+    assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+    assert.match(r.all, new RegExp(`${flag} must not be repeated`));
+  });
+}
+
+test('analyze-patterns: duplicate --min-threshold with bare later occurrence exits 2', () => {
+  const r = runScript('analyze-patterns.mjs', '--min-threshold', '5', '--min-threshold');
+  assert.equal(r.status, 2, 'duplicate bare --min-threshold must exit 2');
   assert.match(r.all, /--min-threshold requires a value/);
 });
 
-test('analyze-patterns: bare --min-vendor-n exits 2', () => {
-  const r = runScript('analyze-patterns.mjs', '--min-vendor-n');
-  assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+test('analyze-patterns: duplicate --min-vendor-n with bare later occurrence exits 2', () => {
+  const r = runScript('analyze-patterns.mjs', '--min-vendor-n', '5', '--min-vendor-n');
+  assert.equal(r.status, 2, 'duplicate bare --min-vendor-n must exit 2');
   assert.match(r.all, /--min-vendor-n requires a value/);
 });
 

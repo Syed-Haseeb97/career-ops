@@ -1673,12 +1673,45 @@ function printSummary(result) {
 
 // --- Run (CLI only; guarded so the module is safely importable for tests) ---
 if (isMainModule(import.meta.url)) {
+  // Validate every occurrence rather than only the first value returned by
+  // flagValue(). Duplicate flags are ambiguous and must not hide a bad later
+  // value.
   for (const flag of VALUE_FLAGS) {
-    const index = args.indexOf(flag);
-    const next = index === -1 ? undefined : args[index + 1];
-    if (index !== -1 && (next === undefined || next.startsWith('--'))) {
-      console.error(`Error: ${flag} requires a value`);
+    const occurrences = [];
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === flag) {
+        const next = args[i + 1];
+        if (next === undefined || next.startsWith('--')) {
+          console.error(`Error: ${flag} requires a value`);
+          process.exit(2);
+        }
+        occurrences.push(next);
+      } else if (arg.startsWith(`${flag}=`)) {
+        const value = arg.slice(flag.length + 1);
+        if (value === '') {
+          console.error(`Error: ${flag} requires a value`);
+          process.exit(2);
+        }
+        occurrences.push(value);
+      }
+    }
+    if (occurrences.length > 1) {
+      console.error(`Error: ${flag} must not be repeated`);
       process.exit(2);
+    }
+    if (occurrences.length === 1) {
+      const raw = occurrences[0];
+      const text = String(raw).trim();
+      if (!/^\d+$/.test(text)) {
+        console.error(`Error: ${flag} requires a positive integer, got "${raw}"`);
+        process.exit(2);
+      }
+      const parsed = Number(text);
+      if (!Number.isSafeInteger(parsed) || parsed < 1) {
+        console.error(`Error: ${flag} requires a positive integer, got "${raw}"`);
+        process.exit(2);
+      }
     }
   }
 
@@ -1686,37 +1719,6 @@ if (isMainModule(import.meta.url)) {
     valueFlags: VALUE_FLAGS,
     requireOperand: true,
   });
-
-  // Strict validation for numeric value flags. Errors exit with code 2 to
-  // match recent conventions. Presence is detected via flagValue so both
-  // `--flag value` and `--flag=value` are accepted.
-  const rawMinThreshold = flagValue(args, '--min-threshold');
-  if (rawMinThreshold !== undefined) {
-    const text = String(rawMinThreshold).trim();
-    if (!/^\d+$/.test(text)) {
-      console.error(`Error: --min-threshold requires a positive integer, got "${rawMinThreshold}"`);
-      process.exit(2);
-    }
-    const parsed = Number(text);
-    if (!Number.isSafeInteger(parsed) || parsed < 1) {
-      console.error(`Error: --min-threshold requires a positive integer, got "${rawMinThreshold}"`);
-      process.exit(2);
-    }
-  }
-
-  const rawMinVendor = flagValue(args, '--min-vendor-n');
-  if (rawMinVendor !== undefined) {
-    const text = String(rawMinVendor).trim();
-    if (!/^\d+$/.test(text)) {
-      console.error(`Error: --min-vendor-n requires a positive integer, got "${rawMinVendor}"`);
-      process.exit(2);
-    }
-    const parsed = Number(text);
-    if (!Number.isSafeInteger(parsed) || parsed < 1) {
-      console.error(`Error: --min-vendor-n requires a positive integer, got "${rawMinVendor}"`);
-      process.exit(2);
-    }
-  }
 
   if (args.includes('--self-test')) {
     runSelfTest();
