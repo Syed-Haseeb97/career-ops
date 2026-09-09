@@ -1678,6 +1678,37 @@ if (isMainModule(import.meta.url)) {
     requireOperand: true,
   });
 
+  // Strict validation for numeric value flags. Errors exit with code 2 to
+  // match recent conventions. Presence is detected via flagValue so both
+  // `--flag value` and `--flag=value` are accepted.
+  const rawMinThreshold = flagValue(args, '--min-threshold');
+  if (rawMinThreshold !== undefined) {
+    const text = String(rawMinThreshold).trim();
+    if (!/^\d+$/.test(text)) {
+      console.error(`Error: --min-threshold requires a non-negative integer, got "${rawMinThreshold}"`);
+      process.exit(2);
+    }
+    const parsed = Number(text);
+    if (!Number.isSafeInteger(parsed) || parsed < 0) {
+      console.error(`Error: --min-threshold requires a non-negative integer, got "${rawMinThreshold}"`);
+      process.exit(2);
+    }
+  }
+
+  const rawMinVendor = flagValue(args, '--min-vendor-n');
+  if (rawMinVendor !== undefined) {
+    const text = String(rawMinVendor).trim();
+    if (!/^\d+$/.test(text)) {
+      console.error(`Error: --min-vendor-n requires a positive integer, got "${rawMinVendor}"`);
+      process.exit(2);
+    }
+    const parsed = Number(text);
+    if (!Number.isSafeInteger(parsed) || parsed < 1) {
+      console.error(`Error: --min-vendor-n requires a positive integer, got "${rawMinVendor}"`);
+      process.exit(2);
+    }
+  }
+
   if (args.includes('--self-test')) {
     runSelfTest();
   }
