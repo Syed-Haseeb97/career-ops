@@ -176,6 +176,18 @@ for (const [form, args] of [
   });
 }
 
+test('analyze-patterns rejects a trailing --min-threshold without an operand', () => {
+  const r = runScript('analyze-patterns.mjs', '--min-threshold');
+  assert.equal(r.status, 1, `exited ${r.status}, want 1`);
+  assert.match(r.all, /--min-threshold requires a value/);
+});
+
+test('analyze-patterns rejects a trailing --min-vendor-n without an operand', () => {
+  const r = runScript('analyze-patterns.mjs', '--min-vendor-n');
+  assert.equal(r.status, 1, `exited ${r.status}, want 1`);
+  assert.match(r.all, /--min-vendor-n requires a value/);
+});
+
 
 // --- missing operand for a RECOGNIZED value-taking flag (#3087) ------------
 //
