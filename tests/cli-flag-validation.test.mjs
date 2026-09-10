@@ -147,6 +147,36 @@ test('fix-slugs rejects missing --file values (bare, empty, or next-is-flag)', (
   assert.doesNotMatch(rShortFlagEq.all, /no portals file at/i);
 });
 
+// --- analyze-patterns specific: numeric value flags must be strict ----------
+for (const [form, args] of [
+  ['space-separated', ['--min-threshold', 'abc']],
+  ['negative', ['--min-threshold', '-5']],
+  ['decimal', ['--min-threshold', '1.5']],
+  ['extra characters', ['--min-threshold', '10abc']],
+  ['unsafe integer', ['--min-threshold=9007199254740992']],
+]) {
+  test(`analyze-patterns rejects ${form} threshold values`, () => {
+    const r = runScript('analyze-patterns.mjs', ...args);
+    assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+    assert.match(r.all, /--min-threshold requires a non-negative integer, got/);
+  });
+}
+
+for (const [form, args] of [
+  ['space-separated', ['--min-vendor-n', 'abc']],
+  ['zero', ['--min-vendor-n', '0']],
+  ['negative', ['--min-vendor-n=-1']],
+  ['decimal', ['--min-vendor-n=1.5']],
+  ['unsafe integer', ['--min-vendor-n', '9007199254740992']],
+]) {
+  test(`analyze-patterns rejects ${form} vendor sample values`, () => {
+    const r = runScript('analyze-patterns.mjs', ...args);
+    assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+    assert.match(r.all, /--min-vendor-n requires a positive integer, got/);
+  });
+}
+
+
 // --- missing operand for a RECOGNIZED value-taking flag (#3087) ------------
 //
 // A different defect than an unrecognized flag: the flag is spelled right,
