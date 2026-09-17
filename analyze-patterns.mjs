@@ -1,2 +1,1 @@
-#!/usr/bin/env node
-/** placeholder fix - will overwrite */
+SEE_FILE
