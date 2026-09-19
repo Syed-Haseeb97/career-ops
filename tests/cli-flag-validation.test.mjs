@@ -215,7 +215,7 @@ for (const [form, args] of [
 ]) {
   test(`analyze-patterns rejects ${form} threshold values`, () => {
     const r = runScript('analyze-patterns.mjs', ...args);
-    assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+    assert.equal(r.status, 1, `exited ${r.status}, want 1`);
     assert.match(r.all, /--min-threshold requires a non-negative integer, got/);
   });
 }
@@ -229,7 +229,7 @@ for (const [form, args] of [
 ]) {
   test(`analyze-patterns rejects ${form} vendor sample values`, () => {
     const r = runScript('analyze-patterns.mjs', ...args);
-    assert.equal(r.status, 2, `exited ${r.status}, want 2`);
+    assert.equal(r.status, 1, `exited ${r.status}, want 1`);
     assert.match(r.all, /--min-vendor-n requires a positive integer, got/);
   });
 }
